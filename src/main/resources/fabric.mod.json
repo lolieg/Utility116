@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "utility116",
+  "version": "${version}",
+  "name": "Utility116",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/utility116/icon.png",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "me.lolieg.utility116.Utility116"
+    ]
+  },
+  "mixins": [
+    "utility116.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.10.1+build.209",
+    "fabric": "*",
+    "minecraft": "1.16.3"
+  }
+}
