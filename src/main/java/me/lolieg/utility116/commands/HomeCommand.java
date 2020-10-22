@@ -3,8 +3,10 @@ package me.lolieg.utility116.commands;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mongodb.lang.Nullable;
 import me.lolieg.utility116.Utility116;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.command.ServerCommandSource;
@@ -20,30 +22,37 @@ import org.bson.BsonArray;
 import org.bson.BsonDouble;
 import org.bson.BsonString;
 import org.bson.Document;
+import org.bson.codecs.configuration.CodecRegistries;
 import org.bson.conversions.Bson;
 
 import java.util.ArrayList;
+import java.util.function.BiConsumer;
 
 import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
 
 public class HomeCommand {
-    //TODO fix order bug with home cmd
     public static void register(CommandDispatcher<ServerCommandSource> dispatcher, boolean dedicated){
         dispatcher.register(literal("home")
                 .executes(HomeCommand::home)
                 .then(argument("number", IntegerArgumentType.integer(1, Utility116.config.maxHomes))
                         .executes(HomeCommand::home)));
         dispatcher.register(literal("sethome")
-                .executes(HomeCommand::sethome)
+                .executes(HomeCommand::setHome)
                 .then(argument("number", IntegerArgumentType.integer(1, Utility116.config.maxHomes))
-                        .executes(HomeCommand::sethome)));
+                        .executes(HomeCommand::setHome)
+                            .then(argument("name", StringArgumentType.greedyString())
+                                .executes(HomeCommand::setHome))));
+        dispatcher.register(literal("sethomename")
+                .then(argument("number", IntegerArgumentType.integer(1, Utility116.config.maxHomes))
+                        .then(argument("name", StringArgumentType.greedyString())
+                                .executes(HomeCommand::setName))));
         dispatcher.register(literal("delhome")
-                .executes(HomeCommand::delhome)
+                .executes(HomeCommand::delHome)
                 .then(argument("number", IntegerArgumentType.integer(1, Utility116.config.maxHomes))
-                        .executes(HomeCommand::delhome)));
+                        .executes(HomeCommand::delHome)));
         dispatcher.register(literal("listhomes")
-                .executes(HomeCommand::listhomes));
+                .executes(HomeCommand::listHomes));
 
     }
 
@@ -55,26 +64,33 @@ public class HomeCommand {
         }
     }
 
+    private static String getName(CommandContext<ServerCommandSource> ctx){
+        try{
+            return StringArgumentType.getString(ctx, "name");
+        }catch (IllegalArgumentException argumentException){
+            return "";
+        }
+    }
 
-    public static int sethome(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
+
+    public static int setHome(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
         ServerCommandSource source = ctx.getSource();
+        int number = getNumber(ctx);
+        String name = getName(ctx);
+
         BsonArray cords = new BsonArray();
         cords.add(new BsonDouble(source.getPlayer().getX()));
         cords.add(new BsonDouble(source.getPlayer().getY()));
         cords.add(new BsonDouble(source.getPlayer().getZ()));
         cords.add(new BsonString(source.getWorld().getRegistryKey().getValue().toString()));
-
-        int number = getNumber(ctx);
+        if(name != null && !name.isEmpty()){
+            cords.add(new BsonString(name));
+        }
 
         Document player = new Document("uuid", new BsonString(source.getPlayer().getUuidAsString()));
         Document result = Utility116.collection.find(player).first();
         if(result != null){
             Document homes = (Document) result.get("homes");
-            int number2 = number-1;
-            if(number > 1 && !homes.containsKey(String.valueOf(number2))){
-                source.sendError(new LiteralText("Set your home points in order please, the next number you should set is " + homes.size()+1 ));
-                return Command.SINGLE_SUCCESS;
-            }
             homes.append(String.valueOf(number), cords);
             result.append("homes", homes);
             Utility116.collection.replaceOne(player, result);
@@ -83,9 +99,37 @@ public class HomeCommand {
             Utility116.collection.insertOne(player);
         }
 
-        source.sendFeedback(new LiteralText("Successfully set home (" + number + ") here!"), false);
+        source.sendFeedback(new LiteralText("Successfully set home (" + number + ") here!" + ((name != null && !name.isEmpty()) ? " name: " + name : "")), false);
         return Command.SINGLE_SUCCESS;
+    }
 
+    public static int setName(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
+        int number = getNumber(ctx);
+        String name = getName(ctx);
+
+        Document player = new Document("uuid", new BsonString(ctx.getSource().getPlayer().getUuidAsString()));
+        Document result = Utility116.collection.find(player).first();
+
+        if(result == null){
+            ctx.getSource().sendError(new LiteralText("You have no home points set!"));
+            return Command.SINGLE_SUCCESS;
+        }
+        Document homes = (Document) result.get("homes");
+        if(!homes.containsKey(String.valueOf(number))){
+            ctx.getSource().sendError(new LiteralText("This home (" + number + ") has not been set yet!"));
+            return Command.SINGLE_SUCCESS;
+        }
+        ArrayList home = (ArrayList) homes.get(String.valueOf(number));
+        if(home.size() == 4){
+            home.add(new BsonString(name));
+        }else{
+            home.add(4, new BsonString(name));
+        }
+        result.append("homes", homes);
+        Utility116.collection.replaceOne(player, result);
+
+        ctx.getSource().sendFeedback(new LiteralText("Successfully set name " + name + " for home (" + number + ")!"), false);
+        return Command.SINGLE_SUCCESS;
     }
 
     public static int home(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
@@ -123,7 +167,7 @@ public class HomeCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    public static int delhome(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
+    public static int delHome(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
 
         int number = getNumber(ctx);
         Bson player = new Document("uuid", new BsonString(ctx.getSource().getPlayer().getUuidAsString()));
@@ -145,7 +189,17 @@ public class HomeCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    public static int listhomes(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
+
+    private static int keyByValue(Document doc, Object value){
+        for(String object : doc.keySet()){
+            if(doc.get(object).equals(value)){
+                return Integer.valueOf(object);
+            }
+        }
+        return 0;
+    }
+
+    public static int listHomes(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException {
         Bson player = new Document("uuid", new BsonString(ctx.getSource().getPlayer().getUuidAsString()));
         Document result = Utility116.collection.find(player).first();
         if (result == null) {
@@ -154,11 +208,10 @@ public class HomeCommand {
         }
         Document homes = (Document) result.get("homes");
         ctx.getSource().getPlayer().sendMessage(new LiteralText("§6<-- You have §c" + homes.size() + "§6 set! -->"), false);
-        for(int i = 1; i < homes.size()+1; i++){
-            ArrayList<?> home = (ArrayList<?>) homes.get(String.valueOf(i));
+        for(Object home:homes.values()){
 
-            ctx.getSource().getPlayer().sendMessage(new LiteralText("§6<-Home " + i + "->§8" + " X:" + Math.round((Double) home.get(0)) + " Y:" + Math.round((Double) home.get(1)) + " Z:" + Math.round((Double) home.get(2)) + " " + home.get(3)), false);
-
+            int i = keyByValue(homes, home);
+            ctx.getSource().getPlayer().sendMessage(new LiteralText("§6<-Home " + i + "->§8" + " X:" + Math.round((Double) ((ArrayList) home).get(0)) + " Y:" + Math.round((Double) ((ArrayList) home).get(1)) + " Z:" + Math.round((Double) ((ArrayList) home).get(2)) + " " + ((ArrayList) home).get(3) + ((((ArrayList) home).size() > 4) ? " name: " + ((ArrayList) home).get(4) : "")), false);
         }
         return Command.SINGLE_SUCCESS;
     }
